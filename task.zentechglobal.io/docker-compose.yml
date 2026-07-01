@@ -1,0 +1,36 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      TASK_ADDR: ":8080"
+      TASK_ID_ISSUER: "https://id.zentechglobal.io"
+      TASK_ID_CLIENT_ID: "task"
+      TASK_ID_REDIRECT_URI: "https://task.zentechglobal.io/auth/callback"
+      TASK_COOKIE_SECURE: "true"
+      TASK_STORE_PATH: "/data/tasks.json"
+    volumes:
+      - task-data:/data
+    networks:
+      - internal-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18082:80"
+    depends_on:
+      - backend
+    networks:
+      - internal-net
+
+volumes:
+  task-data:
+
+networks:
+  internal-net:
+    driver: bridge

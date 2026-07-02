@@ -47,7 +47,19 @@ redirect_uris: https://task.zentechglobal.io/auth/callback
 Run:
 
 ```bash
-docker compose up -d --build
+./scripts/deploy.sh --check
+./scripts/deploy.sh --dry-run
+./scripts/deploy.sh --yes
 ```
 
-Reverse proxy `task.zentechglobal.io` to `127.0.0.1:18082`.
+Current server layout:
+
+- Nginx serves frontend files from `/var/www/task.zentechglobal.io`.
+- Nginx proxies `/api/`, `/auth/`, and `/healthz` to `127.0.0.1:18082`.
+- Backend runs as `task-zentechglobal.service`.
+- Backend binary is installed at `/opt/task-zentechglobal/bin/task-server`.
+- Runtime data is stored at `/opt/task-zentechglobal/data/tasks.json`.
+
+`./scripts/deploy.sh --yes` builds the Vue frontend, builds a Linux AMD64 Go binary,
+uploads both to the `zentech` SSH host, backs up the previous backend binary,
+restarts the service, and verifies `https://task.zentechglobal.io/healthz`.

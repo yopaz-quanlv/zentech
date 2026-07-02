@@ -1404,6 +1404,11 @@ func mcpTools() []mcpTool {
 			}, []string{"project_id", "card_id"}),
 		},
 		{
+			Name:        "list_assignees",
+			Description: "List active users that can be assigned to tasks.",
+			InputSchema: objectSchema(map[string]any{}, []string{}),
+		},
+		{
 			Name:        "update_task_status",
 			Description: "Update a task/card status. Valid statuses: todo, doing, review, done.",
 			InputSchema: objectSchema(map[string]any{
@@ -1430,6 +1435,15 @@ func mcpTools() []mcpTool {
 				"card_id":    stringSchema("Task/card ID or task number."),
 				"body":       stringSchema("Comment body."),
 			}, []string{"project_id", "card_id", "body"}),
+		},
+		{
+			Name:        "assign_task",
+			Description: "Assign a task/card to an active user. assignee can be a user ID, email, or name. Use an empty assignee to clear assignment.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": stringSchema("Project ID containing the task."),
+				"card_id":    stringSchema("Task/card ID or task number."),
+				"assignee":   stringSchema("User ID, email, or name. Empty string clears the assignee."),
+			}, []string{"project_id", "card_id", "assignee"}),
 		},
 	}
 }
@@ -1470,6 +1484,8 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 			return mcpToolError(err.Error()), nil
 		}
 		return mcpToolResult(map[string]any{"task": detail}), nil
+	case "list_assignees":
+		return mcpToolResult(map[string]any{"users": store.ListActiveUsers()}), nil
 	case "update_task_status":
 		var args struct {
 			ProjectID string `json:"project_id"`
@@ -1533,6 +1549,41 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 			telegram.NotifyTaskCommented(detail.Card, comment)
 		}
 		return mcpToolResult(map[string]any{"comment": comment}), nil
+	case "assign_task":
+		var args struct {
+			ProjectID string `json:"project_id"`
+			CardID    string `json:"card_id"`
+			Assignee  string `json:"assignee"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		detail, err := store.GetCardDetail(args.ProjectID, args.CardID)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		assigneeID := ""
+		assigneeName := ""
+		if strings.TrimSpace(args.Assignee) != "" {
+			user, err := store.FindActiveUser(args.Assignee)
+			if err != nil {
+				return mcpToolError(err.Error()), nil
+			}
+			assigneeID = fmt.Sprintf("%d", user.ID)
+			assigneeName = strings.TrimSpace(user.Name)
+			if assigneeName == "" {
+				assigneeName = strings.TrimSpace(user.Email)
+			}
+		}
+		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, nil, nil, &assigneeID, &assigneeName, nil, nil, nil)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		hub.Broadcast("cards:" + args.ProjectID)
+		if summary != "" {
+			telegram.NotifyTaskUpdated(card, cfg.MCPActorID, cfg.MCPActorName, summary)
+		}
+		return mcpToolResult(map[string]any{"card": card, "summary": summary}), nil
 	default:
 		return nil, &mcpError{Code: -32602, Message: "unknown tool"}
 	}

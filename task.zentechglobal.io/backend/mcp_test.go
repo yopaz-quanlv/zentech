@@ -23,6 +23,11 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.UpsertUsers([]SyncedUser{
+		{ID: 42, Email: "dev@example.com", Name: "Dev User", IsActive: true},
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := Config{
 		PublicURL:    "https://task.zentechglobal.io",
@@ -41,8 +46,8 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	})
 	result := list["result"].(map[string]any)
 	tools := result["tools"].([]any)
-	if len(tools) != 6 {
-		t.Fatalf("expected 6 MCP tools, got %d", len(tools))
+	if len(tools) != 8 {
+		t.Fatalf("expected 8 MCP tools, got %d", len(tools))
 	}
 
 	projects := callMCPHandler(t, handler, "test-token", map[string]any{
@@ -83,9 +88,20 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	})
 	assertMCPStructured(t, taskDetail, "task")
 
-	callMCPHandler(t, handler, "test-token", map[string]any{
+	assignees := callMCPHandler(t, handler, "test-token", map[string]any{
 		"jsonrpc": "2.0",
 		"id":      5,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "list_assignees",
+			"arguments": map[string]any{},
+		},
+	})
+	assertMCPStructured(t, assignees, "users")
+
+	callMCPHandler(t, handler, "test-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      6,
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name": "update_task_status",
@@ -106,7 +122,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 
 	callMCPHandler(t, handler, "test-token", map[string]any{
 		"jsonrpc": "2.0",
-		"id":      6,
+		"id":      7,
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name": "update_task_estimate",
@@ -128,7 +144,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 
 	callMCPHandler(t, handler, "test-token", map[string]any{
 		"jsonrpc": "2.0",
-		"id":      7,
+		"id":      8,
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name": "add_task_comment",
@@ -145,6 +161,27 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	}
 	if len(detail.Comments) != 1 || detail.Comments[0].Body != "MCP comment" {
 		t.Fatalf("unexpected comments: %#v", detail.Comments)
+	}
+
+	callMCPHandler(t, handler, "test-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      9,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "assign_task",
+			"arguments": map[string]any{
+				"project_id": project.ID,
+				"card_id":    card.ID,
+				"assignee":   "dev@example.com",
+			},
+		},
+	})
+	detail, err = store.GetCardDetail(project.ID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Card.AssigneeID != "42" || detail.Card.Assignee != "Dev User" {
+		t.Fatalf("unexpected assignee: %q %q", detail.Card.AssigneeID, detail.Card.Assignee)
 	}
 }
 

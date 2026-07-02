@@ -74,9 +74,11 @@ Available tools:
 - `list_projects`: list all projects.
 - `list_project_tasks`: list open tasks for a project.
 - `get_task_detail`: get a task with comments, attachments, and history.
+- `list_assignees`: list active users that can be assigned to tasks.
 - `update_task_status`: set `todo`, `doing`, `review`, or `done`.
 - `update_task_estimate`: set `estimate_hours` and optional `estimate_note`.
 - `add_task_comment`: add a task comment.
+- `assign_task`: assign a task to a user ID, email, or name.
 
 Example:
 

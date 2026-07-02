@@ -985,69 +985,7 @@ async function handleRouteChange() {
           <div class="spinner"></div>
         </div>
         <div v-else class="task-detail-grid">
-          <aside class="detail-left">
-            <section class="panel side-section">
-              <div class="side-heading">
-                <h3><MessageSquare :size="18" /> Bình luận</h3>
-                <span>{{ taskDetail.comments?.length || 0 }}</span>
-              </div>
-              <div class="comment-list">
-                <article v-for="comment in taskDetail.comments" :key="comment.id" class="comment-item">
-                  <strong>{{ comment.author }}</strong>
-                  <time>{{ formatDateTime(comment.created_at) }}</time>
-                  <p>{{ comment.body }}</p>
-                </article>
-                <p v-if="!taskDetail.comments?.length" class="muted">Chưa có bình luận.</p>
-              </div>
-              <form class="comment-form" @submit.prevent="addComment">
-                <textarea v-model="commentText" rows="3" placeholder="Nhập bình luận..." :disabled="taskDetail.card.closed"></textarea>
-                <button class="primary-button" :disabled="saving || taskDetail.card.closed || !commentText.trim()">
-                  <MessageSquare :size="17" />
-                  Gửi bình luận
-                </button>
-              </form>
-            </section>
-
-            <section class="panel side-section">
-              <div class="side-heading">
-                <h3><Paperclip :size="18" /> Đính kèm</h3>
-                <span>{{ taskDetail.attachments?.length || 0 }}</span>
-              </div>
-              <div class="attachment-list">
-                <a
-                  v-for="attachment in taskDetail.attachments"
-                  :key="attachment.id"
-                  class="attachment-item"
-                  :class="{ 'image-attachment': isImageAttachment(attachment) }"
-                  :href="attachment.url"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <img
-                    v-if="isImageAttachment(attachment)"
-                    class="attachment-preview"
-                    :src="attachment.url"
-                    :alt="attachment.filename"
-                    loading="lazy"
-                  />
-                  <Paperclip v-else :size="16" />
-                  <span>
-                    <strong>{{ attachment.filename }}</strong>
-                    <small>{{ formatBytes(attachment.size) }} · {{ attachment.uploader }} · {{ formatDateTime(attachment.created_at) }}</small>
-                  </span>
-                </a>
-                <p v-if="!taskDetail.attachments?.length" class="muted">Chưa có file đính kèm.</p>
-              </div>
-              <div class="upload-row">
-                <input id="task-attachment-input" type="file" :disabled="taskDetail.card.closed" @change="onFileSelected" />
-                <button class="secondary-button" type="button" :disabled="uploading || taskDetail.card.closed || !attachmentFile" @click="uploadAttachment">
-                  <Upload :size="17" />
-                  {{ uploading ? 'Đang tải' : 'Tải lên' }}
-                </button>
-              </div>
-            </section>
-          </aside>
-
+          <div class="detail-main">
           <form v-if="taskEditing" class="panel task-form" @submit.prevent="updateTask">
             <div class="task-editor-heading">
               <div>
@@ -1138,6 +1076,68 @@ async function handleRouteChange() {
               <p>{{ taskDetail.card.estimate_note || 'Chưa có ghi chú estimate.' }}</p>
             </div>
           </section>
+
+            <section class="panel side-section">
+              <div class="side-heading">
+                <h3><MessageSquare :size="18" /> Bình luận</h3>
+                <span>{{ taskDetail.comments?.length || 0 }}</span>
+              </div>
+              <div class="comment-list">
+                <article v-for="comment in taskDetail.comments" :key="comment.id" class="comment-item">
+                  <strong>{{ comment.author }}</strong>
+                  <time>{{ formatDateTime(comment.created_at) }}</time>
+                  <p>{{ comment.body }}</p>
+                </article>
+                <p v-if="!taskDetail.comments?.length" class="muted">Chưa có bình luận.</p>
+              </div>
+              <form class="comment-form" @submit.prevent="addComment">
+                <textarea v-model="commentText" rows="3" placeholder="Nhập bình luận..." :disabled="taskDetail.card.closed"></textarea>
+                <button class="primary-button" :disabled="saving || taskDetail.card.closed || !commentText.trim()">
+                  <MessageSquare :size="17" />
+                  Gửi bình luận
+                </button>
+              </form>
+            </section>
+
+            <section class="panel side-section">
+              <div class="side-heading">
+                <h3><Paperclip :size="18" /> Đính kèm</h3>
+                <span>{{ taskDetail.attachments?.length || 0 }}</span>
+              </div>
+              <div class="attachment-list">
+                <a
+                  v-for="attachment in taskDetail.attachments"
+                  :key="attachment.id"
+                  class="attachment-item"
+                  :class="{ 'image-attachment': isImageAttachment(attachment) }"
+                  :href="attachment.url"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <img
+                    v-if="isImageAttachment(attachment)"
+                    class="attachment-preview"
+                    :src="attachment.url"
+                    :alt="attachment.filename"
+                    loading="lazy"
+                  />
+                  <Paperclip v-else :size="16" />
+                  <span>
+                    <strong>{{ attachment.filename }}</strong>
+                    <small>{{ formatBytes(attachment.size) }} · {{ attachment.uploader }} · {{ formatDateTime(attachment.created_at) }}</small>
+                  </span>
+                </a>
+                <p v-if="!taskDetail.attachments?.length" class="muted">Chưa có file đính kèm.</p>
+              </div>
+              <div class="upload-row">
+                <input id="task-attachment-input" type="file" :disabled="taskDetail.card.closed" @change="onFileSelected" />
+                <button class="secondary-button" type="button" :disabled="uploading || taskDetail.card.closed || !attachmentFile" @click="uploadAttachment">
+                  <Upload :size="17" />
+                  {{ uploading ? 'Đang tải' : 'Tải lên' }}
+                </button>
+              </div>
+            </section>
+          </div>
 
           <aside class="detail-side">
             <section class="panel side-section" :class="{ 'closed-zone': taskDetail.card.closed }">

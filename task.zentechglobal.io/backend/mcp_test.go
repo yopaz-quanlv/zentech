@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestMCPToolsUpdateTask(t *testing.T) {
@@ -46,8 +47,8 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	})
 	result := list["result"].(map[string]any)
 	tools := result["tools"].([]any)
-	if len(tools) != 8 {
-		t.Fatalf("expected 8 MCP tools, got %d", len(tools))
+	if len(tools) != 10 {
+		t.Fatalf("expected 10 MCP tools, got %d", len(tools))
 	}
 
 	projects := callMCPHandler(t, handler, "test-token", map[string]any{
@@ -183,9 +184,70 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	if detail.Card.AssigneeID != "42" || detail.Card.Assignee != "Dev User" {
 		t.Fatalf("unexpected assignee: %q %q", detail.Card.AssigneeID, detail.Card.Assignee)
 	}
+
+	created := callMCPHandler(t, handler, "test-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      10,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "create_task",
+			"arguments": map[string]any{
+				"project_id":     project.ID,
+				"title":          "Created from MCP",
+				"description":    "Created in test",
+				"priority":       "high",
+				"assignee":       "42",
+				"estimate_hours": 2.5,
+				"estimate_note":  "MCP create estimate",
+			},
+		},
+	})
+	createdCard := mcpStructuredMap(t, created, "card")
+	createdID, ok := createdCard["id"].(string)
+	if !ok || createdID == "" {
+		t.Fatalf("missing created card id: %#v", createdCard)
+	}
+
+	callMCPHandler(t, handler, "test-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      11,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "close_task",
+			"arguments": map[string]any{
+				"project_id": project.ID,
+				"card_id":    createdID,
+			},
+		},
+	})
+	closedDetail, err := store.GetCardDetail(project.ID, createdID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !closedDetail.Card.Closed || closedDetail.Card.Status != "done" || closedDetail.Card.CompletedAt == nil {
+		t.Fatalf("close did not complete task: %#v", closedDetail.Card)
+	}
+	openCards, err := store.ListCards(project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range openCards {
+		if item.ID == createdID {
+			t.Fatalf("closed task should be hidden from kanban list")
+		}
+	}
+	stats := store.CompletedHoursStats("2026-07", mustParseReportMonth(t, "2026-07"))
+	if stats.TotalTasks != 1 || stats.TotalHours != 2.5 {
+		t.Fatalf("closed completed task should be in report, got tasks=%d hours=%.1f", stats.TotalTasks, stats.TotalHours)
+	}
 }
 
 func assertMCPStructured(t *testing.T, response map[string]any, key string) {
+	t.Helper()
+	_ = mcpStructuredMap(t, response, key)
+}
+
+func mcpStructuredMap(t *testing.T, response map[string]any, key string) map[string]any {
 	t.Helper()
 	result, ok := response["result"].(map[string]any)
 	if !ok {
@@ -195,9 +257,23 @@ func assertMCPStructured(t *testing.T, response map[string]any, key string) {
 	if !ok {
 		t.Fatalf("missing structuredContent: %#v", result)
 	}
-	if _, ok := structured[key]; !ok {
+	value, ok := structured[key]
+	if !ok {
 		t.Fatalf("missing structuredContent key %q: %#v", key, structured)
 	}
+	if mapped, ok := value.(map[string]any); ok {
+		return mapped
+	}
+	return structured
+}
+
+func mustParseReportMonth(t *testing.T, month string) time.Time {
+	t.Helper()
+	parsed, err := parseReportMonth(month)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
 
 func TestMCPRejectsUnauthorized(t *testing.T) {

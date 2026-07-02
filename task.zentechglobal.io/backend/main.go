@@ -1409,6 +1409,21 @@ func mcpTools() []mcpTool {
 			InputSchema: objectSchema(map[string]any{}, []string{}),
 		},
 		{
+			Name:        "create_task",
+			Description: "Create a task/card in a project.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id":     stringSchema("Project ID to create the task in."),
+				"title":          stringSchema("Task title."),
+				"description":    stringSchema("Optional task description."),
+				"status":         enumStringSchema("Optional initial status.", []string{"todo", "doing", "review", "done"}),
+				"priority":       enumStringSchema("Optional priority.", []string{"low", "medium", "high", "urgent"}),
+				"assignee":       stringSchema("Optional user ID, email, or name to assign."),
+				"due_date":       stringSchema("Optional due date string."),
+				"estimate_hours": numberSchema("Optional estimated hours."),
+				"estimate_note":  stringSchema("Optional estimate note."),
+			}, []string{"project_id", "title"}),
+		},
+		{
 			Name:        "update_task_status",
 			Description: "Update a task/card status. Valid statuses: todo, doing, review, done.",
 			InputSchema: objectSchema(map[string]any{
@@ -1444,6 +1459,14 @@ func mcpTools() []mcpTool {
 				"card_id":    stringSchema("Task/card ID or task number."),
 				"assignee":   stringSchema("User ID, email, or name. Empty string clears the assignee."),
 			}, []string{"project_id", "card_id", "assignee"}),
+		},
+		{
+			Name:        "close_task",
+			Description: "Close a task/card. Closing also marks it done and sets completed_at, hiding it from kanban while keeping it in reports.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": stringSchema("Project ID containing the task."),
+				"card_id":    stringSchema("Task/card ID or task number."),
+			}, []string{"project_id", "card_id"}),
 		},
 	}
 }
@@ -1486,6 +1509,32 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 		return mcpToolResult(map[string]any{"task": detail}), nil
 	case "list_assignees":
 		return mcpToolResult(map[string]any{"users": store.ListActiveUsers()}), nil
+	case "create_task":
+		var args struct {
+			ProjectID     string  `json:"project_id"`
+			Title         string  `json:"title"`
+			Description   string  `json:"description"`
+			Status        string  `json:"status"`
+			Priority      string  `json:"priority"`
+			Assignee      string  `json:"assignee"`
+			DueDate       string  `json:"due_date"`
+			EstimateHours float64 `json:"estimate_hours"`
+			EstimateNote  string  `json:"estimate_note"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		assigneeID, assigneeName, err := resolveMCPAssignee(store, args.Assignee)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		card, err := store.CreateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, args.Title, args.Description, args.Status, args.Priority, assigneeID, assigneeName, args.DueDate, args.EstimateHours, args.EstimateNote)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		hub.Broadcast("cards:" + args.ProjectID)
+		telegram.NotifyTaskCreated(card, cfg.MCPActorID, cfg.MCPActorName)
+		return mcpToolResult(map[string]any{"card": card}), nil
 	case "update_task_status":
 		var args struct {
 			ProjectID string `json:"project_id"`
@@ -1562,18 +1611,9 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}
-		assigneeID := ""
-		assigneeName := ""
-		if strings.TrimSpace(args.Assignee) != "" {
-			user, err := store.FindActiveUser(args.Assignee)
-			if err != nil {
-				return mcpToolError(err.Error()), nil
-			}
-			assigneeID = fmt.Sprintf("%d", user.ID)
-			assigneeName = strings.TrimSpace(user.Name)
-			if assigneeName == "" {
-				assigneeName = strings.TrimSpace(user.Email)
-			}
+		assigneeID, assigneeName, err := resolveMCPAssignee(store, args.Assignee)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
 		}
 		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, nil, nil, &assigneeID, &assigneeName, nil, nil, nil)
 		if err != nil {
@@ -1584,9 +1624,43 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 			telegram.NotifyTaskUpdated(card, cfg.MCPActorID, cfg.MCPActorName, summary)
 		}
 		return mcpToolResult(map[string]any{"card": card, "summary": summary}), nil
+	case "close_task":
+		var args struct {
+			ProjectID string `json:"project_id"`
+			CardID    string `json:"card_id"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		detail, err := store.GetCardDetail(args.ProjectID, args.CardID)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		card, err := store.SetCardClosed(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, true)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		hub.Broadcast("cards:" + args.ProjectID)
+		telegram.NotifyTaskUpdated(card, cfg.MCPActorID, cfg.MCPActorName, "đã close task")
+		return mcpToolResult(map[string]any{"card": card}), nil
 	default:
 		return nil, &mcpError{Code: -32602, Message: "unknown tool"}
 	}
+}
+
+func resolveMCPAssignee(store *Store, query string) (string, string, error) {
+	if strings.TrimSpace(query) == "" {
+		return "", "", nil
+	}
+	user, err := store.FindActiveUser(query)
+	if err != nil {
+		return "", "", err
+	}
+	name := strings.TrimSpace(user.Name)
+	if name == "" {
+		name = strings.TrimSpace(user.Email)
+	}
+	return fmt.Sprintf("%d", user.ID), name, nil
 }
 
 func authenticateMCP(r *http.Request, token string) bool {
@@ -2659,12 +2733,20 @@ func (s *Store) SetCardClosed(userID, actor, projectID, cardID string, closed bo
 		}
 		now := time.Now().UTC()
 		if cards[i].Closed == closed {
-			return cards[i], nil
+			if !closed || (cards[i].Status == "done" && cards[i].CompletedAt != nil) {
+				return cards[i], nil
+			}
 		}
 		cards[i].Closed = closed
 		if closed {
 			cards[i].ClosedAt = &now
-			s.addHistoryLocked(cardID, userID, actor, "close", "Close task")
+			if cards[i].Status != "done" {
+				cards[i].Status = "done"
+			}
+			if cards[i].CompletedAt == nil {
+				cards[i].CompletedAt = &now
+			}
+			s.addHistoryLocked(cardID, userID, actor, "close", "Close task và chuyển hoàn thành")
 		} else {
 			cards[i].ClosedAt = nil
 			s.addHistoryLocked(cardID, userID, actor, "reopen", "Reopen task")

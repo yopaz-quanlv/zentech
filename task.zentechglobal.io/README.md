@@ -63,3 +63,26 @@ Current server layout:
 `./scripts/deploy.sh --yes` builds the Vue frontend, builds a Linux AMD64 Go binary,
 uploads both to the `zentech` SSH host, backs up the previous backend binary,
 restarts the service, and verifies `https://task.zentechglobal.io/healthz`.
+
+## MCP
+
+The backend exposes an HTTP MCP endpoint at `/api/mcp` when `TASK_MCP_TOKEN` is
+configured. Use `Authorization: Bearer <TASK_MCP_TOKEN>` or `X-MCP-Token`.
+
+Available tools:
+
+- `list_projects`: list all projects.
+- `list_project_tasks`: list open tasks for a project.
+- `get_task_detail`: get a task with comments, attachments, and history.
+- `update_task_status`: set `todo`, `doing`, `review`, or `done`.
+- `update_task_estimate`: set `estimate_hours` and optional `estimate_note`.
+- `add_task_comment`: add a task comment.
+
+Example:
+
+```bash
+curl https://task.zentechglobal.io/api/mcp \
+  -H "Authorization: Bearer $TASK_MCP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```

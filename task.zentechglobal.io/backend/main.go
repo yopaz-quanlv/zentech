@@ -37,6 +37,9 @@ type Config struct {
 	PublicURL        string
 	OpenAIAPIKey     string
 	OpenAIModel      string
+	MCPToken         string
+	MCPActorID       string
+	MCPActorName     string
 }
 
 type Claims struct {
@@ -250,6 +253,31 @@ type TelegramBot struct {
 type EstimateResult struct {
 	Hours float64 `json:"hours"`
 	Note  string  `json:"note"`
+}
+
+type mcpRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+type mcpError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type mcpResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *mcpError       `json:"error,omitempty"`
+}
+
+type mcpTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
 }
 
 type telegramUpdatesResponse struct {
@@ -860,6 +888,12 @@ func main() {
 	mux.HandleFunc("POST /api/projects/{projectID}/cards/{cardID}/comments", requireAuth(cfg, createCommentHandler(store, hub, telegram)))
 	mux.HandleFunc("POST /api/projects/{projectID}/cards/{cardID}/attachments", requireAuth(cfg, createAttachmentHandler(store, hub, cfg.UploadPath)))
 	mux.HandleFunc("GET /api/projects/{projectID}/cards/{cardID}/attachments/{attachmentID}", requireAuth(cfg, downloadAttachmentHandler(store, cfg.UploadPath)))
+	if cfg.MCPToken != "" {
+		mux.HandleFunc("POST /api/mcp", mcpHandler(cfg, store, hub, telegram))
+		mux.HandleFunc("OPTIONS /api/mcp", mcpOptionsHandler())
+		mux.HandleFunc("POST /mcp", mcpHandler(cfg, store, hub, telegram))
+		mux.HandleFunc("OPTIONS /mcp", mcpOptionsHandler())
+	}
 
 	log.Printf("task backend listening on %s issuer=%s client_id=%s", cfg.Addr, cfg.Issuer, cfg.ClientID)
 	if err := http.ListenAndServe(cfg.Addr, mux); err != nil {
@@ -882,6 +916,9 @@ func loadConfig() Config {
 		PublicURL:        strings.TrimRight(env("TASK_PUBLIC_URL", "https://task.zentechglobal.io"), "/"),
 		OpenAIAPIKey:     env("TASK_OPENAI_API_KEY", ""),
 		OpenAIModel:      env("TASK_OPENAI_MODEL", "gpt-4o-mini"),
+		MCPToken:         env("TASK_MCP_TOKEN", ""),
+		MCPActorID:       env("TASK_MCP_ACTOR_ID", "mcp"),
+		MCPActorName:     env("TASK_MCP_ACTOR_NAME", "MCP"),
 	}
 }
 
@@ -1279,6 +1316,298 @@ func downloadAttachmentHandler(store *Store, uploadPath string) func(http.Respon
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachment.Filename}))
 		http.ServeFile(w, r, filepath.Join(uploadPath, attachment.StoredName))
 	}
+}
+
+func mcpOptionsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, MCP-Protocol-Version, X-MCP-Token")
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func mcpHandler(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !validMCPOrigin(cfg, r) {
+			writeJSON(w, http.StatusForbidden, mcpResponse{JSONRPC: "2.0", Error: &mcpError{Code: -32000, Message: "invalid origin"}})
+			return
+		}
+		if !authenticateMCP(r, cfg.MCPToken) {
+			writeJSON(w, http.StatusUnauthorized, mcpResponse{JSONRPC: "2.0", Error: &mcpError{Code: -32001, Message: "unauthorized"}})
+			return
+		}
+		var req mcpRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, mcpResponse{JSONRPC: "2.0", Error: &mcpError{Code: -32700, Message: "parse error"}})
+			return
+		}
+		if len(req.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		result, rpcErr := handleMCPRequest(cfg, store, hub, telegram, req)
+		res := mcpResponse{JSONRPC: "2.0", ID: req.ID}
+		if rpcErr != nil {
+			res.Error = rpcErr
+		} else {
+			res.Result = result
+		}
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+func handleMCPRequest(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot, req mcpRequest) (any, *mcpError) {
+	switch req.Method {
+	case "initialize":
+		return map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities": map[string]any{
+				"tools": map[string]any{},
+			},
+			"serverInfo": map[string]any{
+				"name":    "zentech-tasks",
+				"version": "0.1.0",
+			},
+		}, nil
+	case "tools/list":
+		return map[string]any{"tools": mcpTools()}, nil
+	case "tools/call":
+		return callMCPTool(cfg, store, hub, telegram, req.Params)
+	case "ping":
+		return map[string]any{}, nil
+	default:
+		return nil, &mcpError{Code: -32601, Message: "method not found"}
+	}
+}
+
+func mcpTools() []mcpTool {
+	return []mcpTool{
+		{
+			Name:        "list_projects",
+			Description: "List all projects with IDs, names, slugs, statuses, and metadata.",
+			InputSchema: objectSchema(map[string]any{}, []string{}),
+		},
+		{
+			Name:        "list_project_tasks",
+			Description: "List open tasks/cards for a project, sorted in board order.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": stringSchema("Project ID."),
+			}, []string{"project_id"}),
+		},
+		{
+			Name:        "get_task_detail",
+			Description: "Get one task/card with comments, attachments, and history.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": stringSchema("Project ID containing the task."),
+				"card_id":    stringSchema("Task/card ID or task number."),
+			}, []string{"project_id", "card_id"}),
+		},
+		{
+			Name:        "update_task_status",
+			Description: "Update a task/card status. Valid statuses: todo, doing, review, done.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": stringSchema("Project ID containing the task."),
+				"card_id":    stringSchema("Task/card ID or task number."),
+				"status":     enumStringSchema("New status.", []string{"todo", "doing", "review", "done"}),
+			}, []string{"project_id", "card_id", "status"}),
+		},
+		{
+			Name:        "update_task_estimate",
+			Description: "Set task/card estimate hours and optional estimate note.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id":     stringSchema("Project ID containing the task."),
+				"card_id":        stringSchema("Task/card ID or task number."),
+				"estimate_hours": numberSchema("Estimated hours. Negative values are normalized to 0."),
+				"estimate_note":  stringSchema("Optional note explaining the estimate."),
+			}, []string{"project_id", "card_id", "estimate_hours"}),
+		},
+		{
+			Name:        "add_task_comment",
+			Description: "Add a comment to a task/card.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id": stringSchema("Project ID containing the task."),
+				"card_id":    stringSchema("Task/card ID or task number."),
+				"body":       stringSchema("Comment body."),
+			}, []string{"project_id", "card_id", "body"}),
+		},
+	}
+}
+
+func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot, raw json.RawMessage) (any, *mcpError) {
+	var params struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil, &mcpError{Code: -32602, Message: "invalid params"}
+	}
+	switch params.Name {
+	case "list_projects":
+		return mcpToolResult(map[string]any{"projects": store.ListProjects()}), nil
+	case "list_project_tasks":
+		var args struct {
+			ProjectID string `json:"project_id"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		cards, err := store.ListCards(args.ProjectID)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		return mcpToolResult(map[string]any{"tasks": cards}), nil
+	case "get_task_detail":
+		var args struct {
+			ProjectID string `json:"project_id"`
+			CardID    string `json:"card_id"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		detail, err := store.GetCardDetail(args.ProjectID, args.CardID)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		return mcpToolResult(map[string]any{"task": detail}), nil
+	case "update_task_status":
+		var args struct {
+			ProjectID string `json:"project_id"`
+			CardID    string `json:"card_id"`
+			Status    string `json:"status"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		detail, err := store.GetCardDetail(args.ProjectID, args.CardID)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, &args.Status, nil, nil, nil, nil, nil, nil)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		hub.Broadcast("cards:" + args.ProjectID)
+		if summary != "" {
+			telegram.NotifyTaskUpdated(card, cfg.MCPActorID, cfg.MCPActorName, summary)
+		}
+		return mcpToolResult(map[string]any{"card": card, "summary": summary}), nil
+	case "update_task_estimate":
+		var args struct {
+			ProjectID     string  `json:"project_id"`
+			CardID        string  `json:"card_id"`
+			EstimateHours float64 `json:"estimate_hours"`
+			EstimateNote  string  `json:"estimate_note"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		detail, err := store.GetCardDetail(args.ProjectID, args.CardID)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		card, summary, err := store.UpdateCardEstimate(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, args.EstimateHours, args.EstimateNote)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		hub.Broadcast("cards:" + args.ProjectID)
+		if summary != "" {
+			telegram.NotifyTaskUpdated(card, cfg.MCPActorID, cfg.MCPActorName, summary)
+		}
+		return mcpToolResult(map[string]any{"card": card, "summary": summary}), nil
+	case "add_task_comment":
+		var args struct {
+			ProjectID string `json:"project_id"`
+			CardID    string `json:"card_id"`
+			Body      string `json:"body"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		comment, err := store.CreateComment(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, args.CardID, args.Body)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		hub.Broadcast("cards:" + args.ProjectID)
+		if detail, err := store.GetCardDetail(args.ProjectID, args.CardID); err == nil {
+			telegram.NotifyTaskCommented(detail.Card, comment)
+		}
+		return mcpToolResult(map[string]any{"comment": comment}), nil
+	default:
+		return nil, &mcpError{Code: -32602, Message: "unknown tool"}
+	}
+}
+
+func authenticateMCP(r *http.Request, token string) bool {
+	if token == "" {
+		return false
+	}
+	got := strings.TrimSpace(r.Header.Get("X-MCP-Token"))
+	if got == "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			got = strings.TrimSpace(auth[len("Bearer "):])
+		}
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+}
+
+func validMCPOrigin(cfg Config, r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	if publicURL, err := url.Parse(cfg.PublicURL); err == nil && strings.EqualFold(u.Host, publicURL.Host) {
+		return true
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
+func mcpToolResult(payload any) map[string]any {
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		data = []byte(`{"ok":true}`)
+	}
+	return map[string]any{
+		"content": []map[string]string{
+			{"type": "text", "text": string(data)},
+		},
+		"structuredContent": payload,
+	}
+}
+
+func mcpToolError(message string) map[string]any {
+	return map[string]any{
+		"isError": true,
+		"content": []map[string]string{
+			{"type": "text", "text": message},
+		},
+	}
+}
+
+func objectSchema(properties map[string]any, required []string) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"required":             required,
+		"additionalProperties": false,
+	}
+}
+
+func stringSchema(description string) map[string]any {
+	return map[string]any{"type": "string", "description": description}
+}
+
+func enumStringSchema(description string, values []string) map[string]any {
+	return map[string]any{"type": "string", "description": description, "enum": values}
+}
+
+func numberSchema(description string) map[string]any {
+	return map[string]any{"type": "number", "description": description}
 }
 
 func estimateWithOpenAI(ctx context.Context, cfg Config, project Project, card Card) (EstimateResult, error) {

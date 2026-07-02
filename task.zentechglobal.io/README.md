@@ -64,10 +64,14 @@ Current server layout:
 uploads both to the `zentech` SSH host, backs up the previous backend binary,
 restarts the service, and verifies `https://task.zentechglobal.io/healthz`.
 
+Telegram task notifications are batched per task for 10 seconds before sending.
+
 ## MCP
 
 The backend exposes an HTTP MCP endpoint at `/api/mcp` when `TASK_MCP_TOKEN` is
 configured. Use `Authorization: Bearer <TASK_MCP_TOKEN>` or `X-MCP-Token`.
+MCP actions default to actor `Quân`, and `create_task` defaults the assignee to
+`TASK_MCP_DEFAULT_ASSIGNEE` when no assignee is provided.
 
 Available tools:
 

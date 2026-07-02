@@ -25,16 +25,17 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.UpsertUsers([]SyncedUser{
-		{ID: 42, Email: "dev@example.com", Name: "Dev User", IsActive: true},
+		{ID: 42, Email: "dev@example.com", Name: "Quân", IsActive: true},
 	}, ""); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := Config{
-		PublicURL:    "https://task.zentechglobal.io",
-		MCPToken:     "test-token",
-		MCPActorID:   "mcp-test",
-		MCPActorName: "MCP Test",
+		PublicURL:          "https://task.zentechglobal.io",
+		MCPToken:           "test-token",
+		MCPActorID:         "mcp-test",
+		MCPActorName:       "MCP Test",
+		MCPDefaultAssignee: "Quân",
 	}
 	hub := NewEventHub()
 	telegram := NewTelegramBot(cfg, store, hub)
@@ -181,7 +182,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.Card.AssigneeID != "42" || detail.Card.Assignee != "Dev User" {
+	if detail.Card.AssigneeID != "42" || detail.Card.Assignee != "Quân" {
 		t.Fatalf("unexpected assignee: %q %q", detail.Card.AssigneeID, detail.Card.Assignee)
 	}
 
@@ -196,7 +197,6 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 				"title":          "Created from MCP",
 				"description":    "Created in test",
 				"priority":       "high",
-				"assignee":       "42",
 				"estimate_hours": 2.5,
 				"estimate_note":  "MCP create estimate",
 			},
@@ -206,6 +206,9 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	createdID, ok := createdCard["id"].(string)
 	if !ok || createdID == "" {
 		t.Fatalf("missing created card id: %#v", createdCard)
+	}
+	if createdCard["assignee_id"] != "42" || createdCard["assignee"] != "Quân" {
+		t.Fatalf("created task should default assign Quân: %#v", createdCard)
 	}
 
 	callMCPHandler(t, handler, "test-token", map[string]any{
@@ -286,6 +289,46 @@ func TestMCPRejectsUnauthorized(t *testing.T) {
 
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", res.Code)
+	}
+}
+
+func TestTelegramNotificationsBatchPerTask(t *testing.T) {
+	store, err := openStore(filepath.Join(t.TempDir(), "tasks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := store.CreateProject("tester", "Project", "", "", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard("tester", "Tester", project.ID, "Task", "", "todo", "medium", "", "", "", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bot := NewTelegramBot(Config{TelegramBotToken: "test-token", PublicURL: "https://task.zentechglobal.io"}, store, NewEventHub())
+
+	bot.NotifyTaskCreated(card, "tester", "Tester")
+	bot.NotifyTaskUpdated(card, "tester", "Tester", "đổi estimate")
+
+	key := card.ProjectID + ":" + card.ID
+	bot.notifyMu.Lock()
+	item := bot.notifyQueue[key]
+	if item == nil {
+		t.Fatal("missing queued notification")
+	}
+	if len(item.lines) != 2 {
+		t.Fatalf("expected 2 queued lines, got %d", len(item.lines))
+	}
+	version := item.version
+	item.timer.Stop()
+	bot.notifyMu.Unlock()
+
+	bot.flushTaskNotification(key, version)
+
+	bot.notifyMu.Lock()
+	defer bot.notifyMu.Unlock()
+	if _, ok := bot.notifyQueue[key]; ok {
+		t.Fatal("expected notification queue to be flushed")
 	}
 }
 

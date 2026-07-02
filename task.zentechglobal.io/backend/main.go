@@ -25,21 +25,22 @@ import (
 )
 
 type Config struct {
-	Addr             string
-	Issuer           string
-	ClientID         string
-	RedirectURI      string
-	CookieSecure     bool
-	StorePath        string
-	UploadPath       string
-	TelegramBotToken string
-	TelegramChatIDs  []int64
-	PublicURL        string
-	OpenAIAPIKey     string
-	OpenAIModel      string
-	MCPToken         string
-	MCPActorID       string
-	MCPActorName     string
+	Addr               string
+	Issuer             string
+	ClientID           string
+	RedirectURI        string
+	CookieSecure       bool
+	StorePath          string
+	UploadPath         string
+	TelegramBotToken   string
+	TelegramChatIDs    []int64
+	PublicURL          string
+	OpenAIAPIKey       string
+	OpenAIModel        string
+	MCPToken           string
+	MCPActorID         string
+	MCPActorName       string
+	MCPDefaultAssignee string
 }
 
 type Claims struct {
@@ -242,12 +243,22 @@ func (h *EventHub) Broadcast(event string) {
 }
 
 type TelegramBot struct {
-	token     string
-	chats     []int64
-	publicURL string
-	store     *Store
-	hub       *EventHub
-	client    *http.Client
+	token       string
+	chats       []int64
+	publicURL   string
+	store       *Store
+	hub         *EventHub
+	client      *http.Client
+	notifyMu    sync.Mutex
+	notifyQueue map[string]*telegramNotification
+}
+
+type telegramNotification struct {
+	projectID string
+	header    string
+	lines     []string
+	timer     *time.Timer
+	version   int64
 }
 
 type EstimateResult struct {
@@ -316,12 +327,13 @@ type telegramUser struct {
 
 func NewTelegramBot(cfg Config, store *Store, hub *EventHub) *TelegramBot {
 	return &TelegramBot{
-		token:     strings.TrimSpace(cfg.TelegramBotToken),
-		chats:     cfg.TelegramChatIDs,
-		publicURL: strings.TrimRight(cfg.PublicURL, "/"),
-		store:     store,
-		hub:       hub,
-		client:    &http.Client{Timeout: 35 * time.Second},
+		token:       strings.TrimSpace(cfg.TelegramBotToken),
+		chats:       cfg.TelegramChatIDs,
+		publicURL:   strings.TrimRight(cfg.PublicURL, "/"),
+		store:       store,
+		hub:         hub,
+		client:      &http.Client{Timeout: 35 * time.Second},
+		notifyQueue: map[string]*telegramNotification{},
 	}
 }
 
@@ -372,18 +384,64 @@ func (b *TelegramBot) deleteWebhook() error {
 }
 
 func (b *TelegramBot) NotifyTaskCreated(card Card, actorID, actor string) {
-	b.notifyProject(card.ProjectID, b.formatTaskHeader(card)+"\n"+formatActorChange(actorID, actor, "vừa tạo task mới"))
+	b.queueTaskNotification(card, formatActorChange(actorID, actor, "vừa tạo task mới"))
 }
 
 func (b *TelegramBot) NotifyTaskUpdated(card Card, actorID, actor, summary string) {
-	b.notifyProject(card.ProjectID, b.formatTaskHeader(card)+"\n"+formatActorChange(actorID, actor, summary))
+	b.queueTaskNotification(card, formatActorChange(actorID, actor, summary))
 }
 
 func (b *TelegramBot) NotifyTaskCommented(card Card, comment Comment) {
-	b.notifyProject(card.ProjectID, b.formatTaskHeader(card)+"\n"+formatActorChange(comment.AuthorID, comment.Author, "bình luận: "+comment.Body))
+	b.queueTaskNotification(card, formatActorChange(comment.AuthorID, comment.Author, "bình luận: "+comment.Body))
 }
 
-func (b *TelegramBot) notifyProject(projectID, text string) {
+func (b *TelegramBot) queueTaskNotification(card Card, line string) {
+	if !b.Enabled() || strings.TrimSpace(line) == "" {
+		return
+	}
+	key := card.ProjectID + ":" + card.ID
+	b.notifyMu.Lock()
+	item := b.notifyQueue[key]
+	if item == nil {
+		item = &telegramNotification{
+			projectID: card.ProjectID,
+			header:    b.formatTaskHeader(card) + taskAssigneeLine(card),
+		}
+		b.notifyQueue[key] = item
+	} else {
+		item.header = b.formatTaskHeader(card) + taskAssigneeLine(card)
+		if item.timer != nil {
+			item.timer.Stop()
+		}
+	}
+	item.lines = append(item.lines, strings.TrimSpace(line))
+	item.version++
+	version := item.version
+	item.timer = time.AfterFunc(10*time.Second, func() {
+		b.flushTaskNotification(key, version)
+	})
+	b.notifyMu.Unlock()
+}
+
+func (b *TelegramBot) flushTaskNotification(key string, version int64) {
+	b.notifyMu.Lock()
+	item := b.notifyQueue[key]
+	if item == nil {
+		b.notifyMu.Unlock()
+		return
+	}
+	if item.version != version {
+		b.notifyMu.Unlock()
+		return
+	}
+	delete(b.notifyQueue, key)
+	text := item.header + "\n" + strings.Join(item.lines, "\n")
+	projectID := item.projectID
+	b.notifyMu.Unlock()
+	b.notifyProjectNow(projectID, text)
+}
+
+func (b *TelegramBot) notifyProjectNow(projectID, text string) {
 	if !b.Enabled() {
 		return
 	}
@@ -904,21 +962,22 @@ func main() {
 func loadConfig() Config {
 	storePath := env("TASK_STORE_PATH", "data/tasks.json")
 	return Config{
-		Addr:             env("TASK_ADDR", ":8080"),
-		Issuer:           strings.TrimRight(env("TASK_ID_ISSUER", "https://id.zentechglobal.io"), "/"),
-		ClientID:         env("TASK_ID_CLIENT_ID", "task"),
-		RedirectURI:      env("TASK_ID_REDIRECT_URI", "https://task.zentechglobal.io/auth/callback"),
-		CookieSecure:     envBool("TASK_COOKIE_SECURE", true),
-		StorePath:        storePath,
-		UploadPath:       env("TASK_UPLOAD_PATH", filepath.Join(filepath.Dir(storePath), "uploads")),
-		TelegramBotToken: env("TASK_TELEGRAM_BOT_TOKEN", ""),
-		TelegramChatIDs:  envInt64List("TASK_TELEGRAM_CHAT_IDS"),
-		PublicURL:        strings.TrimRight(env("TASK_PUBLIC_URL", "https://task.zentechglobal.io"), "/"),
-		OpenAIAPIKey:     env("TASK_OPENAI_API_KEY", ""),
-		OpenAIModel:      env("TASK_OPENAI_MODEL", "gpt-4o-mini"),
-		MCPToken:         env("TASK_MCP_TOKEN", ""),
-		MCPActorID:       env("TASK_MCP_ACTOR_ID", "mcp"),
-		MCPActorName:     env("TASK_MCP_ACTOR_NAME", "MCP"),
+		Addr:               env("TASK_ADDR", ":8080"),
+		Issuer:             strings.TrimRight(env("TASK_ID_ISSUER", "https://id.zentechglobal.io"), "/"),
+		ClientID:           env("TASK_ID_CLIENT_ID", "task"),
+		RedirectURI:        env("TASK_ID_REDIRECT_URI", "https://task.zentechglobal.io/auth/callback"),
+		CookieSecure:       envBool("TASK_COOKIE_SECURE", true),
+		StorePath:          storePath,
+		UploadPath:         env("TASK_UPLOAD_PATH", filepath.Join(filepath.Dir(storePath), "uploads")),
+		TelegramBotToken:   env("TASK_TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatIDs:    envInt64List("TASK_TELEGRAM_CHAT_IDS"),
+		PublicURL:          strings.TrimRight(env("TASK_PUBLIC_URL", "https://task.zentechglobal.io"), "/"),
+		OpenAIAPIKey:       env("TASK_OPENAI_API_KEY", ""),
+		OpenAIModel:        env("TASK_OPENAI_MODEL", "gpt-4o-mini"),
+		MCPToken:           env("TASK_MCP_TOKEN", ""),
+		MCPActorID:         env("TASK_MCP_ACTOR_ID", "quan"),
+		MCPActorName:       env("TASK_MCP_ACTOR_NAME", "Quân"),
+		MCPDefaultAssignee: env("TASK_MCP_DEFAULT_ASSIGNEE", "Quân"),
 	}
 }
 
@@ -1524,7 +1583,11 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
 			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
 		}
-		assigneeID, assigneeName, err := resolveMCPAssignee(store, args.Assignee)
+		assigneeQuery := args.Assignee
+		if strings.TrimSpace(assigneeQuery) == "" {
+			assigneeQuery = cfg.MCPDefaultAssignee
+		}
+		assigneeID, assigneeName, err := resolveMCPAssignee(store, assigneeQuery)
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}

@@ -466,18 +466,22 @@ func (b *TelegramBot) handleMessage(message telegramMessage) {
 		log.Printf("telegram save chat: %v", err)
 	}
 	text := strings.TrimSpace(message.Text)
+	command := telegramCommandName(text)
+	if command != "" {
+		log.Printf("telegram command=%s chat=%d thread=%d", command, message.Chat.ID, message.MessageThreadID)
+	}
 	switch {
-	case text == "/start" || strings.HasPrefix(text, "/start "):
-		_ = b.reply(message, "Đã nhận chat Telegram. Vào web lấy mã kết nối project rồi gửi /connect <mã>. Nếu dùng forum group, gửi lệnh trong đúng topic cần kết nối. Tạo task: /create \"Tên task\". Gán người phụ trách: /assign #id_task #id_nhan_vien hoặc /assign #id_task email.")
-	case strings.HasPrefix(text, "/connect"):
+	case command == "start":
+		b.replyLogged(message, "Đã nhận chat Telegram. Vào web lấy mã kết nối project rồi gửi /connect <mã>. Nếu dùng forum group, gửi lệnh trong đúng topic cần kết nối. Tạo task: /create \"Tên task\". Gán người phụ trách: /assign #id_task #id_nhan_vien hoặc /assign #id_task email.")
+	case command == "connect":
 		b.connectProjectFromMessage(message)
-	case strings.HasPrefix(text, "/create"):
+	case command == "create":
 		b.createTaskFromMessage(message)
-	case strings.HasPrefix(text, "/report"):
+	case command == "report":
 		b.reportFromMessage(message)
-	case strings.HasPrefix(text, "/assign"):
+	case command == "assign":
 		b.assignTaskFromMessage(message)
-	case strings.HasPrefix(text, "/delete"):
+	case command == "delete":
 		b.deleteTaskFromMessage(message)
 	}
 }
@@ -485,7 +489,7 @@ func (b *TelegramBot) handleMessage(message telegramMessage) {
 func (b *TelegramBot) connectProjectFromMessage(message telegramMessage) {
 	code := parseTelegramCommandArg(message.Text)
 	if code == "" {
-		_ = b.reply(message, "Cú pháp: /connect <mã_kết_nối_project>")
+		b.replyLogged(message, "Cú pháp: /connect <mã_kết_nối_project>")
 		return
 	}
 	chat := TelegramChat{
@@ -496,46 +500,49 @@ func (b *TelegramBot) connectProjectFromMessage(message telegramMessage) {
 	}
 	project, err := b.store.BindTelegramChat(code, chat)
 	if err != nil {
-		_ = b.reply(message, "Không kết nối được project: "+err.Error())
+		b.replyLogged(message, "Không kết nối được project: "+err.Error())
 		return
 	}
 	b.hub.Broadcast("projects")
-	_ = b.reply(message, "Đã kết nối Telegram với project: "+project.Name)
+	log.Printf("telegram connect chat=%d thread=%d project=%s", message.Chat.ID, message.MessageThreadID, project.ID)
+	b.replyLogged(message, "Đã kết nối Telegram với project: "+project.Name)
 }
 
 func (b *TelegramBot) createTaskFromMessage(message telegramMessage) {
 	title, description := parseTelegramCreatePayload(message.Text)
 	if title == "" {
-		_ = b.reply(message, "Cú pháp: /create \"Tên task\" hoặc /create\\nTên task\\nMô tả task")
+		b.replyLogged(message, "Cú pháp: /create \"Tên task\" hoặc /create\\nTên task\\nMô tả task")
 		return
 	}
 	projectID := b.store.ProjectIDForTelegramTarget(message.Chat.ID, message.MessageThreadID)
+	log.Printf("telegram create lookup chat=%d thread=%d project=%s", message.Chat.ID, message.MessageThreadID, projectID)
 	if projectID == "" {
-		_ = b.reply(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
+		b.replyLogged(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
 		return
 	}
 	actor := telegramUserName(message.From)
 	card, err := b.store.CreateCard(fmt.Sprintf("telegram:%d", message.From.ID), actor, projectID, title, description, "todo", "medium", "", "", "", 0, "Tạo từ Telegram")
 	if err != nil {
-		_ = b.reply(message, "Không tạo được task: "+err.Error())
+		b.replyLogged(message, "Không tạo được task: "+err.Error())
 		return
 	}
 	b.hub.Broadcast("cards:" + projectID)
-	_ = b.reply(message, b.formatTaskHeader(card)+"\n"+formatActorChange(fmt.Sprintf("telegram:%d", message.From.ID), actor, "vừa tạo task mới"))
+	b.replyLogged(message, b.formatTaskHeader(card)+"\n"+formatActorChange(fmt.Sprintf("telegram:%d", message.From.ID), actor, "vừa tạo task mới"))
 }
 
 func (b *TelegramBot) reportFromMessage(message telegramMessage) {
 	projectID := b.store.ProjectIDForTelegramTarget(message.Chat.ID, message.MessageThreadID)
+	log.Printf("telegram report lookup chat=%d thread=%d project=%s", message.Chat.ID, message.MessageThreadID, projectID)
 	if projectID == "" {
-		_ = b.reply(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
+		b.replyLogged(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
 		return
 	}
 	project, cards, err := b.store.ProjectReport(projectID)
 	if err != nil {
-		_ = b.reply(message, "Không tạo được report: "+err.Error())
+		b.replyLogged(message, "Không tạo được report: "+err.Error())
 		return
 	}
-	_ = b.reply(message, b.formatProjectReport(project, cards))
+	b.replyLogged(message, b.formatProjectReport(project, cards))
 }
 
 func (b *TelegramBot) formatProjectReport(project Project, cards []Card) string {
@@ -604,22 +611,23 @@ func (b *TelegramBot) formatReportTaskLine(card Card) string {
 func (b *TelegramBot) assignTaskFromMessage(message telegramMessage) {
 	args := parseTelegramQuotedArgs(message.Text, "/assign")
 	if len(args) < 2 {
-		_ = b.reply(message, "Cú pháp: /assign #id_task #id_nhan_vien hoặc /assign #id_task email")
+		b.replyLogged(message, "Cú pháp: /assign #id_task #id_nhan_vien hoặc /assign #id_task email")
 		return
 	}
 	projectID := b.store.ProjectIDForTelegramTarget(message.Chat.ID, message.MessageThreadID)
+	log.Printf("telegram assign lookup chat=%d thread=%d project=%s", message.Chat.ID, message.MessageThreadID, projectID)
 	if projectID == "" {
-		_ = b.reply(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
+		b.replyLogged(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
 		return
 	}
 	card, err := b.store.FindCard(projectID, args[0])
 	if err != nil {
-		_ = b.reply(message, "Không tìm thấy task: "+err.Error())
+		b.replyLogged(message, "Không tìm thấy task: "+err.Error())
 		return
 	}
 	assignee, err := b.store.FindActiveUser(args[1])
 	if err != nil {
-		_ = b.reply(message, "Không tìm thấy assignee: "+err.Error())
+		b.replyLogged(message, "Không tìm thấy assignee: "+err.Error())
 		return
 	}
 	assigneeID := fmt.Sprintf("%d", assignee.ID)
@@ -630,36 +638,37 @@ func (b *TelegramBot) assignTaskFromMessage(message telegramMessage) {
 	actor := telegramUserName(message.From)
 	updated, _, err := b.store.UpdateCard(fmt.Sprintf("telegram:%d", message.From.ID), actor, projectID, card.ID, nil, nil, nil, nil, &assigneeID, &assigneeName, nil, nil, nil)
 	if err != nil {
-		_ = b.reply(message, "Không đổi được assignee: "+err.Error())
+		b.replyLogged(message, "Không đổi được assignee: "+err.Error())
 		return
 	}
 	b.hub.Broadcast("cards:" + projectID)
-	_ = b.reply(message, b.formatTaskHeader(updated)+"\n"+formatActorChange(fmt.Sprintf("telegram:%d", message.From.ID), actor, "đổi người phụ trách thành #"+assigneeID+" - "+assigneeName))
+	b.replyLogged(message, b.formatTaskHeader(updated)+"\n"+formatActorChange(fmt.Sprintf("telegram:%d", message.From.ID), actor, "đổi người phụ trách thành #"+assigneeID+" - "+assigneeName))
 }
 
 func (b *TelegramBot) deleteTaskFromMessage(message telegramMessage) {
 	args := parseTelegramQuotedArgs(message.Text, "/delete")
 	if len(args) < 1 {
-		_ = b.reply(message, "Cú pháp: /delete #id_task")
+		b.replyLogged(message, "Cú pháp: /delete #id_task")
 		return
 	}
 	projectID := b.store.ProjectIDForTelegramTarget(message.Chat.ID, message.MessageThreadID)
+	log.Printf("telegram delete lookup chat=%d thread=%d project=%s", message.Chat.ID, message.MessageThreadID, projectID)
 	if projectID == "" {
-		_ = b.reply(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
+		b.replyLogged(message, "Group/topic này chưa kết nối project. Vào web lấy mã rồi gửi /connect <mã> trong đúng topic.")
 		return
 	}
 	card, err := b.store.FindCard(projectID, args[0])
 	if err != nil {
-		_ = b.reply(message, "Không tìm thấy task: "+err.Error())
+		b.replyLogged(message, "Không tìm thấy task: "+err.Error())
 		return
 	}
 	actor := telegramUserName(message.From)
 	if err := b.store.DeleteCard(fmt.Sprintf("telegram:%d", message.From.ID), actor, projectID, card.ID); err != nil {
-		_ = b.reply(message, "Không xóa được task: "+err.Error())
+		b.replyLogged(message, "Không xóa được task: "+err.Error())
 		return
 	}
 	b.hub.Broadcast("cards:" + projectID)
-	_ = b.reply(message, b.formatTaskHeader(card)+"\n"+formatActorChange(fmt.Sprintf("telegram:%d", message.From.ID), actor, "đã xóa task"))
+	b.replyLogged(message, b.formatTaskHeader(card)+"\n"+formatActorChange(fmt.Sprintf("telegram:%d", message.From.ID), actor, "đã xóa task"))
 }
 
 func (b *TelegramBot) getUpdates(offset int64) ([]telegramUpdate, error) {
@@ -696,6 +705,12 @@ func (b *TelegramBot) reply(message telegramMessage, text string) error {
 	return b.sendMessage(message.Chat.ID, message.MessageThreadID, text)
 }
 
+func (b *TelegramBot) replyLogged(message telegramMessage, text string) {
+	if err := b.reply(message, text); err != nil {
+		log.Printf("telegram reply chat=%d thread=%d: %v", message.Chat.ID, message.MessageThreadID, err)
+	}
+}
+
 func (b *TelegramBot) sendMessage(chatID, messageThreadID int64, text string) error {
 	if !b.Enabled() || strings.TrimSpace(text) == "" {
 		return nil
@@ -730,6 +745,18 @@ func (b *TelegramBot) sendMessage(chatID, messageThreadID int64, text string) er
 
 func (b *TelegramBot) apiURL(method string) string {
 	return "https://api.telegram.org/bot" + b.token + "/" + method
+}
+
+func telegramCommandName(text string) string {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+		return ""
+	}
+	command := strings.TrimPrefix(fields[0], "/")
+	if at := strings.Index(command, "@"); at >= 0 {
+		command = command[:at]
+	}
+	return strings.ToLower(strings.TrimSpace(command))
 }
 
 func parseTelegramCreatePayload(text string) (string, string) {

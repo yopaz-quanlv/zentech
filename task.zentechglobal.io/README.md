@@ -72,6 +72,10 @@ The backend exposes an HTTP MCP endpoint at `/api/mcp` when `TASK_MCP_TOKEN` is
 configured. Use `Authorization: Bearer <TASK_MCP_TOKEN>` or `X-MCP-Token`.
 MCP actions default to actor `Quân`, and `create_task` defaults the assignee to
 `TASK_MCP_DEFAULT_ASSIGNEE` when no assignee is provided.
+When `TASK_OPENAI_API_KEY` is configured, newly created tasks are reviewed by AI.
+If a task needs verification/debugging but has no `http://` or `https://`
+evidence link in the title, description, or estimate note, the backend adds a
+comment asking for evidence.
 
 Available tools:
 

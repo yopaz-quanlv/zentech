@@ -332,6 +332,15 @@ func TestTelegramNotificationsBatchPerTask(t *testing.T) {
 	}
 }
 
+func TestTaskEvidenceLinkDetection(t *testing.T) {
+	if !taskHasEvidenceLink(Card{Description: "Ảnh lỗi: https://work.zentechglobal.io/storage/error.png"}) {
+		t.Fatal("expected https evidence link to be detected")
+	}
+	if taskHasEvidenceLink(Card{Title: "Kiểm tra báo cáo thiếu số", Description: "User báo thiếu dữ liệu nhưng chưa gửi ảnh"}) {
+		t.Fatal("did not expect evidence link without http/https URL")
+	}
+}
+
 func callMCPHandler(t *testing.T, handler http.HandlerFunc, token string, payload map[string]any) map[string]any {
 	t.Helper()
 	body, err := json.Marshal(payload)

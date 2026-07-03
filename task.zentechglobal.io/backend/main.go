@@ -243,6 +243,7 @@ func (h *EventHub) Broadcast(event string) {
 }
 
 type TelegramBot struct {
+	cfg         Config
 	token       string
 	chats       []int64
 	publicURL   string
@@ -264,6 +265,12 @@ type telegramNotification struct {
 type EstimateResult struct {
 	Hours float64 `json:"hours"`
 	Note  string  `json:"note"`
+}
+
+type TaskReviewResult struct {
+	NeedsVerification bool   `json:"needs_verification"`
+	Reason            string `json:"reason"`
+	Comment           string `json:"comment"`
 }
 
 type mcpRequest struct {
@@ -327,6 +334,7 @@ type telegramUser struct {
 
 func NewTelegramBot(cfg Config, store *Store, hub *EventHub) *TelegramBot {
 	return &TelegramBot{
+		cfg:         cfg,
 		token:       strings.TrimSpace(cfg.TelegramBotToken),
 		chats:       cfg.TelegramChatIDs,
 		publicURL:   strings.TrimRight(cfg.PublicURL, "/"),
@@ -526,8 +534,29 @@ func (b *TelegramBot) createTaskFromMessage(message telegramMessage) {
 		b.replyLogged(message, "Không tạo được task: "+err.Error())
 		return
 	}
+	b.reviewNewTask(context.Background(), projectID, card, fmt.Sprintf("telegram:%d", message.From.ID), actor)
 	b.hub.Broadcast("cards:" + projectID)
 	b.replyLogged(message, b.formatTaskHeader(card)+"\n"+formatActorChange(fmt.Sprintf("telegram:%d", message.From.ID), actor, "vừa tạo task mới"))
+}
+
+func (b *TelegramBot) reviewNewTask(ctx context.Context, projectID string, card Card, actorID, actor string) {
+	if b == nil {
+		return
+	}
+	comment, err := reviewNewTaskEvidence(ctx, b.cfg, b.store, projectID, card)
+	if err != nil {
+		log.Printf("task review skipped for card=%s: %v", card.ID, err)
+		return
+	}
+	if comment == "" {
+		return
+	}
+	created, err := b.store.CreateComment(actorID, actor, projectID, card.ID, comment)
+	if err != nil {
+		log.Printf("task review comment failed for card=%s: %v", card.ID, err)
+		return
+	}
+	b.NotifyTaskCommented(card, created)
 }
 
 func (b *TelegramBot) reportFromMessage(message telegramMessage) {
@@ -963,7 +992,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/projects/{id}", requireAuth(cfg, deleteProjectHandler(store, hub)))
 	mux.HandleFunc("GET /api/tasks/{cardID}", requireAuth(cfg, getTaskDetailByIDHandler(store)))
 	mux.HandleFunc("GET /api/projects/{id}/cards", requireAuth(cfg, listCardsHandler(store)))
-	mux.HandleFunc("POST /api/projects/{id}/cards", requireAuth(cfg, createCardHandler(store, hub, telegram)))
+	mux.HandleFunc("POST /api/projects/{id}/cards", requireAuth(cfg, createCardHandler(cfg, store, hub, telegram)))
 	mux.HandleFunc("GET /api/projects/{projectID}/cards/{cardID}", requireAuth(cfg, getCardDetailHandler(store)))
 	mux.HandleFunc("PATCH /api/projects/{projectID}/cards/{cardID}", requireAuth(cfg, updateCardHandler(store, hub, telegram)))
 	mux.HandleFunc("POST /api/projects/{projectID}/cards/{cardID}/estimate", requireAuth(cfg, estimateCardHandler(cfg, store, hub, telegram)))
@@ -1189,7 +1218,7 @@ func listAllCardsHandler(store *Store) func(http.ResponseWriter, *http.Request, 
 	}
 }
 
-func createCardHandler(store *Store, hub *EventHub, telegram *TelegramBot) func(http.ResponseWriter, *http.Request, Claims) {
+func createCardHandler(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot) func(http.ResponseWriter, *http.Request, Claims) {
 	return func(w http.ResponseWriter, r *http.Request, claims Claims) {
 		var input struct {
 			Title         string  `json:"title"`
@@ -1213,6 +1242,7 @@ func createCardHandler(store *Store, hub *EventHub, telegram *TelegramBot) func(
 		}
 		hub.Broadcast("cards:" + r.PathValue("id"))
 		telegram.NotifyTaskCreated(card, claims.Subject, claims.Name)
+		maybeCreateTaskReviewComment(r.Context(), cfg, store, telegram, r.PathValue("id"), card, claims.Subject, claims.Name)
 		writeJSON(w, http.StatusCreated, card)
 	}
 }
@@ -1624,6 +1654,7 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 		}
 		hub.Broadcast("cards:" + args.ProjectID)
 		telegram.NotifyTaskCreated(card, cfg.MCPActorID, cfg.MCPActorName)
+		maybeCreateTaskReviewComment(context.Background(), cfg, store, telegram, args.ProjectID, card, cfg.MCPActorID, cfg.MCPActorName)
 		return mcpToolResult(map[string]any{"card": card}), nil
 	case "update_task_status":
 		var args struct {
@@ -1823,6 +1854,124 @@ func enumStringSchema(description string, values []string) map[string]any {
 
 func numberSchema(description string) map[string]any {
 	return map[string]any{"type": "number", "description": description}
+}
+
+func maybeCreateTaskReviewComment(ctx context.Context, cfg Config, store *Store, telegram *TelegramBot, projectID string, card Card, actorID, actor string) {
+	comment, err := reviewNewTaskEvidence(ctx, cfg, store, projectID, card)
+	if err != nil {
+		log.Printf("task review skipped for card=%s: %v", card.ID, err)
+		return
+	}
+	if comment == "" {
+		return
+	}
+	created, err := store.CreateComment(actorID, actor, projectID, card.ID, comment)
+	if err != nil {
+		log.Printf("task review comment failed for card=%s: %v", card.ID, err)
+		return
+	}
+	if telegram != nil {
+		telegram.NotifyTaskCommented(card, created)
+	}
+}
+
+func reviewNewTaskEvidence(ctx context.Context, cfg Config, store *Store, projectID string, card Card) (string, error) {
+	if strings.TrimSpace(cfg.OpenAIAPIKey) == "" {
+		return "", nil
+	}
+	if taskHasEvidenceLink(card) {
+		return "", nil
+	}
+	project, _, err := store.ProjectAndCard(projectID, card.ID)
+	if err != nil {
+		return "", err
+	}
+	review, err := reviewTaskWithOpenAI(ctx, cfg, project, card)
+	if err != nil {
+		return "", err
+	}
+	if !review.NeedsVerification {
+		return "", nil
+	}
+	comment := strings.TrimSpace(review.Comment)
+	if comment == "" {
+		comment = "AI review: Task này có vẻ cần kiểm tra/xác minh nhưng mô tả chưa có link bằng chứng. Vui lòng bổ sung link ảnh, log, URL màn hình lỗi hoặc nguồn dữ liệu liên quan trước khi xử lý sâu."
+	}
+	return comment, nil
+}
+
+func taskHasEvidenceLink(card Card) bool {
+	text := strings.ToLower(card.Title + " " + card.Description + " " + card.EstimateNote)
+	return strings.Contains(text, "http://") || strings.Contains(text, "https://")
+}
+
+func reviewTaskWithOpenAI(ctx context.Context, cfg Config, project Project, card Card) (TaskReviewResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	prompt := fmt.Sprintf(`Review this newly created task title and description.
+
+Return only JSON with:
+{"needs_verification": boolean, "reason": "short Vietnamese reason", "comment": "Vietnamese comment to add if evidence link is missing"}
+
+Rules:
+- needs_verification=true only when the task asks someone to check, verify, investigate, debug, compare data, reproduce a bug, inspect a report/dashboard, or fix a reported system issue where external evidence would materially help.
+- needs_verification=false for clear implementation tasks, small edits, direct feature requests, or tasks that already contain enough actionable detail.
+- The backend has already confirmed this task has no http/https evidence link. If needs_verification=true, comment must politely ask for a link to evidence such as screenshot, affected URL, logs, report URL, or source data.
+- Do not ask for evidence when the task is already clear enough to implement without external verification.
+
+Project:
+Name: %s
+Description: %s
+
+Task:
+Title: %s
+Description: %s`, project.Name, project.Description, card.Title, card.Description)
+
+	body, err := json.Marshal(map[string]any{
+		"model": cfg.OpenAIModel,
+		"messages": []map[string]string{
+			{"role": "system", "content": "You review task quality for an internal engineering task board. Return valid compact JSON only."},
+			{"role": "user", "content": prompt},
+		},
+		"temperature":     0,
+		"response_format": map[string]string{"type": "json_object"},
+	})
+	if err != nil {
+		return TaskReviewResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return TaskReviewResult{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.OpenAIAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return TaskReviewResult{}, err
+	}
+	defer res.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(res.Body, 2<<20))
+	if res.StatusCode >= 300 {
+		return TaskReviewResult{}, fmt.Errorf("openai returned %d: %s", res.StatusCode, string(data))
+	}
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return TaskReviewResult{}, err
+	}
+	if len(payload.Choices) == 0 {
+		return TaskReviewResult{}, errors.New("openai returned no choices")
+	}
+	var result TaskReviewResult
+	if err := json.Unmarshal([]byte(payload.Choices[0].Message.Content), &result); err != nil {
+		return TaskReviewResult{}, err
+	}
+	return result, nil
 }
 
 func estimateWithOpenAI(ctx context.Context, cfg Config, project Project, card Card) (EstimateResult, error) {

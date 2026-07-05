@@ -86,6 +86,7 @@ Available tools:
 - `create_task`: create a task in a project.
 - `update_task_status`: set `todo`, `doing`, `review`, or `done`.
 - `update_task_estimate`: set `estimate_hours` and optional `estimate_note`.
+- `update_task_cost_incurred`: mark or clear the incurred-cost flag.
 - `add_task_comment`: add a task comment.
 - `assign_task`: assign a task to a user ID, email, or name.
 - `close_task`: close a task, mark it done, and keep it in completed-hours reports.

@@ -1563,6 +1563,15 @@ func mcpTools() []mcpTool {
 			}, []string{"project_id", "card_id", "estimate_hours"}),
 		},
 		{
+			Name:        "update_task_cost_incurred",
+			Description: "Set whether a task/card has extra incurred cost.",
+			InputSchema: objectSchema(map[string]any{
+				"project_id":    stringSchema("Project ID containing the task."),
+				"card_id":       stringSchema("Task/card ID or task number."),
+				"cost_incurred": booleanSchema("True marks the task as incurred cost; false clears it."),
+			}, []string{"project_id", "card_id", "cost_incurred"}),
+		},
+		{
 			Name:        "add_task_comment",
 			Description: "Add a comment to a task/card.",
 			InputSchema: objectSchema(map[string]any{
@@ -1698,6 +1707,28 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 			return mcpToolError(err.Error()), nil
 		}
 		card, summary, err := store.UpdateCardEstimate(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, args.EstimateHours, args.EstimateNote)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		hub.Broadcast("cards:" + args.ProjectID)
+		if summary != "" {
+			telegram.NotifyTaskUpdated(card, cfg.MCPActorID, cfg.MCPActorName, summary)
+		}
+		return mcpToolResult(map[string]any{"card": card, "summary": summary}), nil
+	case "update_task_cost_incurred":
+		var args struct {
+			ProjectID    string `json:"project_id"`
+			CardID       string `json:"card_id"`
+			CostIncurred bool   `json:"cost_incurred"`
+		}
+		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+			return nil, &mcpError{Code: -32602, Message: "invalid arguments"}
+		}
+		detail, err := store.GetCardDetail(args.ProjectID, args.CardID)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, nil, nil, &args.CostIncurred, nil, nil, nil, nil, nil)
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}

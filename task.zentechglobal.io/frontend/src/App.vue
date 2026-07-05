@@ -468,6 +468,26 @@ async function updateTaskAssignee() {
   }
 }
 
+async function updateTaskCostIncurred(nextValue) {
+  if (!activeProjectId.value || !taskForm.value.id) return;
+  saving.value = true;
+  error.value = '';
+  try {
+    const card = await request(`/api/projects/${activeProjectId.value}/cards/${taskForm.value.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ cost_incurred: Boolean(nextValue) }),
+    });
+    cards.value = cards.value.map((item) => (item.id === card.id ? card : item));
+    taskDetail.value = { ...taskDetail.value, card };
+    taskForm.value = { ...emptyTaskForm(), ...card };
+    if (activeView.value === 'stats') await loadCompletedStats();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    saving.value = false;
+  }
+}
+
 async function autoEstimateTask() {
   if (!activeProjectId.value || !taskForm.value.id || !canAutoEstimate.value) return;
   estimating.value = true;
@@ -1179,6 +1199,23 @@ async function handleRouteChange() {
               >
                 Reopen task
               </button>
+            </section>
+
+            <section class="panel side-section">
+              <div class="side-heading">
+                <h3>Phát sinh chi phí</h3>
+                <span v-if="taskDetail.card.cost_incurred" class="cost-badge">Có</span>
+                <span v-else>Không</span>
+              </div>
+              <label class="checkbox-field cost-toggle">
+                <input
+                  :checked="taskDetail.card.cost_incurred"
+                  type="checkbox"
+                  :disabled="saving || taskDetail.card.closed"
+                  @change="updateTaskCostIncurred($event.target.checked)"
+                />
+                <span>Đánh dấu phát sinh chi phí</span>
+              </label>
             </section>
 
             <section v-if="canAutoEstimate" class="panel side-section">

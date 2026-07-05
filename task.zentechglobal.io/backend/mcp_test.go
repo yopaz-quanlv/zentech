@@ -48,8 +48,8 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	})
 	result := list["result"].(map[string]any)
 	tools := result["tools"].([]any)
-	if len(tools) != 10 {
-		t.Fatalf("expected 10 MCP tools, got %d", len(tools))
+	if len(tools) != 11 {
+		t.Fatalf("expected 11 MCP tools, got %d", len(tools))
 	}
 
 	projects := callMCPHandler(t, handler, "test-token", map[string]any{
@@ -149,6 +149,27 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 		"id":      8,
 		"method":  "tools/call",
 		"params": map[string]any{
+			"name": "update_task_cost_incurred",
+			"arguments": map[string]any{
+				"project_id":    project.ID,
+				"card_id":       card.ID,
+				"cost_incurred": true,
+			},
+		},
+	})
+	detail, err = store.GetCardDetail(project.ID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !detail.Card.CostIncurred {
+		t.Fatalf("expected cost_incurred to be true")
+	}
+
+	callMCPHandler(t, handler, "test-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      9,
+		"method":  "tools/call",
+		"params": map[string]any{
 			"name": "add_task_comment",
 			"arguments": map[string]any{
 				"project_id": project.ID,
@@ -167,7 +188,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 
 	callMCPHandler(t, handler, "test-token", map[string]any{
 		"jsonrpc": "2.0",
-		"id":      9,
+		"id":      10,
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name": "assign_task",
@@ -188,7 +209,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 
 	created := callMCPHandler(t, handler, "test-token", map[string]any{
 		"jsonrpc": "2.0",
-		"id":      10,
+		"id":      11,
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name": "create_task",
@@ -217,7 +238,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 
 	callMCPHandler(t, handler, "test-token", map[string]any{
 		"jsonrpc": "2.0",
-		"id":      11,
+		"id":      12,
 		"method":  "tools/call",
 		"params": map[string]any{
 			"name": "close_task",

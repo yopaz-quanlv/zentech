@@ -775,6 +775,13 @@ td small {
   margin: 0;
 }
 
+.cost-toggle {
+  border: 1px solid #ffe4e8;
+  border-radius: 8px;
+  background: #fff7f8;
+  padding: 10px 12px;
+}
+
 .readonly-priority {
   display: inline-flex;
   flex-wrap: wrap;

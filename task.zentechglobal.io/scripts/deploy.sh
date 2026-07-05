@@ -89,8 +89,11 @@ build_local() {
   require_cmd npm
   require_cmd go
 
+  local app_version
+  app_version="${VITE_APP_VERSION:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
+
   log "Building frontend"
-  (cd "$FRONTEND_DIR" && npm ci && npm run build)
+  (cd "$FRONTEND_DIR" && npm ci && VITE_APP_VERSION="$app_version" npm run build)
 
   log "Building Linux backend binary"
   mkdir -p "$LOCAL_OUT"

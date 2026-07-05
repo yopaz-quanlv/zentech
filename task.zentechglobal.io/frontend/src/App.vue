@@ -29,6 +29,8 @@ const columns = [
   { key: 'done', label: 'Hoàn thành' },
 ];
 
+const appVersion = import.meta.env.VITE_APP_VERSION || 'dev';
+
 const loading = ref(true);
 const saving = ref(false);
 const user = ref(null);
@@ -771,7 +773,7 @@ async function handleRouteChange() {
         <FolderKanban :size="24" />
         <div>
           <strong>Zentech Projects</strong>
-          <span>Quản lý project và Kanban</span>
+          <span>Quản lý project và Kanban · v{{ appVersion }}</span>
         </div>
       </div>
       <nav v-if="user" class="nav-tabs" aria-label="Điều hướng chính">

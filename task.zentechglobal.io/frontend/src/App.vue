@@ -163,7 +163,7 @@ async function load() {
     const routeTaskId = taskIdFromPath();
     if (routeTaskId) await openTaskById(routeTaskId, false);
     else if (projectSlugFromPath()) await openProjectBySlug(projectSlugFromPath(), false);
-    else openAllBoard(false);
+    else openProjectList(false);
   } catch (err) {
     if (err.message !== 'unauthorized') error.value = err.message;
   } finally {
@@ -759,7 +759,7 @@ async function handleRouteChange() {
     await openProjectBySlug(routeProjectSlug, false);
     return;
   }
-  await openAllBoard(false);
+  openProjectList(false);
 }
 
 </script>

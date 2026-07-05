@@ -77,7 +77,7 @@ const filteredCards = computed(() => {
   const needle = search.value.trim().toLowerCase();
   if (!needle) return cards.value;
   return cards.value.filter((card) =>
-    [card.title, card.description, card.assignee, card.priority].some((value) =>
+    [card.title, card.description, card.assignee, card.priority, card.cost_incurred ? 'phát sinh chi phí' : ''].some((value) =>
       String(value || '').toLowerCase().includes(needle),
     ),
   );
@@ -123,6 +123,7 @@ function emptyTaskForm(status = 'todo') {
     description: '',
     status,
     priority: 'medium',
+    cost_incurred: false,
     assignee_id: '',
     assignee: '',
     due_date: '',
@@ -396,6 +397,7 @@ function taskPayload() {
     description: taskForm.value.description || '',
     status: taskForm.value.status,
     priority: taskForm.value.priority,
+    cost_incurred: Boolean(taskForm.value.cost_incurred),
     assignee_id: taskForm.value.assignee_id || '',
     assignee: taskForm.value.assignee_id ? selectedAssigneeName(taskForm.value.assignee_id, taskForm.value.assignee) : '',
     due_date: taskForm.value.due_date || '',
@@ -881,7 +883,10 @@ async function handleRouteChange() {
                 @click="openTaskDetail(card)"
               >
                 <div class="card-topline">
-                  <span class="priority" :class="card.priority">{{ priorityLabel(card.priority) }}</span>
+                  <div class="card-badges">
+                    <span class="priority" :class="card.priority">{{ priorityLabel(card.priority) }}</span>
+                    <span v-if="card.cost_incurred" class="cost-badge">Phát sinh chi phí</span>
+                  </div>
                   <span class="status-dot">#{{ taskPublicId(card) }} · {{ column.label }}</span>
                 </div>
                 <h3>{{ card.title }}</h3>
@@ -938,6 +943,10 @@ async function handleRouteChange() {
                 <option value="high">Cao</option>
                 <option value="urgent">Gấp</option>
               </select>
+              <label class="checkbox-field">
+                <input v-model="taskForm.cost_incurred" type="checkbox" />
+                <span>Phát sinh chi phí</span>
+              </label>
               <label>Người phụ trách</label>
               <select v-model="taskForm.assignee_id">
                 <option value="">Chưa gán</option>
@@ -1019,6 +1028,10 @@ async function handleRouteChange() {
                   <option value="high">Cao</option>
                   <option value="urgent">Gấp</option>
                 </select>
+                <label class="checkbox-field">
+                  <input v-model="taskForm.cost_incurred" type="checkbox" />
+                  <span>Phát sinh chi phí</span>
+                </label>
                 <label>Người phụ trách</label>
                 <select v-model="taskForm.assignee_id">
                   <option value="">Chưa gán</option>
@@ -1048,7 +1061,10 @@ async function handleRouteChange() {
             <div class="readonly-grid">
               <div>
                 <span>Ưu tiên</span>
-                <strong>{{ priorityLabel(taskDetail.card.priority) }}</strong>
+                <strong class="readonly-priority">
+                  {{ priorityLabel(taskDetail.card.priority) }}
+                  <span v-if="taskDetail.card.cost_incurred" class="cost-badge">Phát sinh chi phí</span>
+                </strong>
               </div>
               <div>
                 <span>Deadline</span>

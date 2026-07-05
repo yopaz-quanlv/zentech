@@ -475,7 +475,16 @@ td small {
 }
 
 .card-topline {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   justify-content: space-between;
+}
+
+.card-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .priority,
@@ -505,7 +514,19 @@ td small {
   color: #087443;
 }
 
+.cost-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #fff1f3;
+  color: #b42318;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .status-dot {
+  flex: 0 0 auto;
   color: #667085;
   font-size: 12px;
   font-weight: 800;
@@ -737,6 +758,28 @@ td small {
   display: grid;
   gap: 8px;
   margin-top: 14px;
+}
+
+.checkbox-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.readonly-priority {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .side-heading {

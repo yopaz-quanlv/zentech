@@ -20,7 +20,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard("tester", "Tester", project.ID, "Task", "Description", "todo", "medium", "", "", "", 0, "")
+	card, err := store.CreateCard("tester", "Tester", project.ID, "Task", "Description", "todo", "medium", false, "", "", "", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +197,7 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 				"title":          "Created from MCP",
 				"description":    "Created in test",
 				"priority":       "high",
+				"cost_incurred":  true,
 				"estimate_hours": 2.5,
 				"estimate_note":  "MCP create estimate",
 			},
@@ -209,6 +210,9 @@ func TestMCPToolsUpdateTask(t *testing.T) {
 	}
 	if createdCard["assignee_id"] != "42" || createdCard["assignee"] != "Quân" {
 		t.Fatalf("created task should default assign Quân: %#v", createdCard)
+	}
+	if createdCard["cost_incurred"] != true {
+		t.Fatalf("created task should keep cost_incurred flag: %#v", createdCard)
 	}
 
 	callMCPHandler(t, handler, "test-token", map[string]any{
@@ -301,7 +305,7 @@ func TestTelegramNotificationsBatchPerTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard("tester", "Tester", project.ID, "Task", "", "todo", "medium", "", "", "", 0, "")
+	card, err := store.CreateCard("tester", "Tester", project.ID, "Task", "", "todo", "medium", false, "", "", "", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}

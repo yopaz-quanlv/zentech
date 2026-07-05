@@ -97,6 +97,7 @@ type Card struct {
 	Description   string     `json:"description"`
 	Status        string     `json:"status"`
 	Priority      string     `json:"priority"`
+	CostIncurred  bool       `json:"cost_incurred"`
 	AssigneeID    string     `json:"assignee_id"`
 	Assignee      string     `json:"assignee"`
 	DueDate       string     `json:"due_date"`
@@ -529,7 +530,7 @@ func (b *TelegramBot) createTaskFromMessage(message telegramMessage) {
 		return
 	}
 	actor := telegramUserName(message.From)
-	card, err := b.store.CreateCard(fmt.Sprintf("telegram:%d", message.From.ID), actor, projectID, title, description, "todo", "medium", "", "", "", 0, "Tạo từ Telegram")
+	card, err := b.store.CreateCard(fmt.Sprintf("telegram:%d", message.From.ID), actor, projectID, title, description, "todo", "medium", false, "", "", "", 0, "Tạo từ Telegram")
 	if err != nil {
 		b.replyLogged(message, "Không tạo được task: "+err.Error())
 		return
@@ -665,7 +666,7 @@ func (b *TelegramBot) assignTaskFromMessage(message telegramMessage) {
 		assigneeName = assignee.Email
 	}
 	actor := telegramUserName(message.From)
-	updated, _, err := b.store.UpdateCard(fmt.Sprintf("telegram:%d", message.From.ID), actor, projectID, card.ID, nil, nil, nil, nil, &assigneeID, &assigneeName, nil, nil, nil)
+	updated, _, err := b.store.UpdateCard(fmt.Sprintf("telegram:%d", message.From.ID), actor, projectID, card.ID, nil, nil, nil, nil, nil, &assigneeID, &assigneeName, nil, nil, nil)
 	if err != nil {
 		b.replyLogged(message, "Không đổi được assignee: "+err.Error())
 		return
@@ -1225,6 +1226,7 @@ func createCardHandler(cfg Config, store *Store, hub *EventHub, telegram *Telegr
 			Description   string  `json:"description"`
 			Status        string  `json:"status"`
 			Priority      string  `json:"priority"`
+			CostIncurred  bool    `json:"cost_incurred"`
 			AssigneeID    string  `json:"assignee_id"`
 			Assignee      string  `json:"assignee"`
 			DueDate       string  `json:"due_date"`
@@ -1235,7 +1237,7 @@ func createCardHandler(cfg Config, store *Store, hub *EventHub, telegram *Telegr
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		card, err := store.CreateCard(claims.Subject, claims.Name, r.PathValue("id"), input.Title, input.Description, input.Status, input.Priority, input.AssigneeID, input.Assignee, input.DueDate, input.EstimateHours, input.EstimateNote)
+		card, err := store.CreateCard(claims.Subject, claims.Name, r.PathValue("id"), input.Title, input.Description, input.Status, input.Priority, input.CostIncurred, input.AssigneeID, input.Assignee, input.DueDate, input.EstimateHours, input.EstimateNote)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -1276,6 +1278,7 @@ func updateCardHandler(store *Store, hub *EventHub, telegram *TelegramBot) func(
 			Description   *string  `json:"description"`
 			Status        *string  `json:"status"`
 			Priority      *string  `json:"priority"`
+			CostIncurred  *bool    `json:"cost_incurred"`
 			AssigneeID    *string  `json:"assignee_id"`
 			Assignee      *string  `json:"assignee"`
 			DueDate       *string  `json:"due_date"`
@@ -1286,7 +1289,7 @@ func updateCardHandler(store *Store, hub *EventHub, telegram *TelegramBot) func(
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		card, summary, err := store.UpdateCard(claims.Subject, claims.Name, r.PathValue("projectID"), r.PathValue("cardID"), input.Title, input.Description, input.Status, input.Priority, input.AssigneeID, input.Assignee, input.DueDate, input.EstimateHours, input.EstimateNote)
+		card, summary, err := store.UpdateCard(claims.Subject, claims.Name, r.PathValue("projectID"), r.PathValue("cardID"), input.Title, input.Description, input.Status, input.Priority, input.CostIncurred, input.AssigneeID, input.Assignee, input.DueDate, input.EstimateHours, input.EstimateNote)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -1533,6 +1536,7 @@ func mcpTools() []mcpTool {
 				"description":    stringSchema("Optional task description."),
 				"status":         enumStringSchema("Optional initial status.", []string{"todo", "doing", "review", "done"}),
 				"priority":       enumStringSchema("Optional priority.", []string{"low", "medium", "high", "urgent"}),
+				"cost_incurred":  booleanSchema("Optional. True when the task has extra incurred cost."),
 				"assignee":       stringSchema("Optional user ID, email, or name to assign."),
 				"due_date":       stringSchema("Optional due date string."),
 				"estimate_hours": numberSchema("Optional estimated hours."),
@@ -1632,6 +1636,7 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 			Description   string  `json:"description"`
 			Status        string  `json:"status"`
 			Priority      string  `json:"priority"`
+			CostIncurred  bool    `json:"cost_incurred"`
 			Assignee      string  `json:"assignee"`
 			DueDate       string  `json:"due_date"`
 			EstimateHours float64 `json:"estimate_hours"`
@@ -1648,7 +1653,7 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}
-		card, err := store.CreateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, args.Title, args.Description, args.Status, args.Priority, assigneeID, assigneeName, args.DueDate, args.EstimateHours, args.EstimateNote)
+		card, err := store.CreateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, args.Title, args.Description, args.Status, args.Priority, args.CostIncurred, assigneeID, assigneeName, args.DueDate, args.EstimateHours, args.EstimateNote)
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}
@@ -1669,7 +1674,7 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}
-		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, &args.Status, nil, nil, nil, nil, nil, nil)
+		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, &args.Status, nil, nil, nil, nil, nil, nil, nil)
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}
@@ -1736,7 +1741,7 @@ func callMCPTool(cfg Config, store *Store, hub *EventHub, telegram *TelegramBot,
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}
-		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, nil, nil, &assigneeID, &assigneeName, nil, nil, nil)
+		card, summary, err := store.UpdateCard(cfg.MCPActorID, cfg.MCPActorName, args.ProjectID, detail.Card.ID, nil, nil, nil, nil, nil, &assigneeID, &assigneeName, nil, nil, nil)
 		if err != nil {
 			return mcpToolError(err.Error()), nil
 		}
@@ -1854,6 +1859,10 @@ func enumStringSchema(description string, values []string) map[string]any {
 
 func numberSchema(description string) map[string]any {
 	return map[string]any{"type": "number", "description": description}
+}
+
+func booleanSchema(description string) map[string]any {
+	return map[string]any{"type": "boolean", "description": description}
 }
 
 func maybeCreateTaskReviewComment(ctx context.Context, cfg Config, store *Store, telegram *TelegramBot, projectID string, card Card, actorID, actor string) {
@@ -2751,7 +2760,7 @@ func (s *Store) ProjectAndCard(projectID, cardID string) (Project, Card, error) 
 	return project, card, nil
 }
 
-func (s *Store) CreateCard(userID, actor, projectID, title, description, status, priority, assigneeID, assignee, dueDate string, estimateHours float64, estimateNote string) (Card, error) {
+func (s *Store) CreateCard(userID, actor, projectID, title, description, status, priority string, costIncurred bool, assigneeID, assignee, dueDate string, estimateHours float64, estimateNote string) (Card, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return Card{}, errors.New("card title is required")
@@ -2777,6 +2786,7 @@ func (s *Store) CreateCard(userID, actor, projectID, title, description, status,
 		Description:   strings.TrimSpace(description),
 		Status:        normalizedStatus,
 		Priority:      normalizePriority(priority),
+		CostIncurred:  costIncurred,
 		AssigneeID:    strings.TrimSpace(assigneeID),
 		Assignee:      strings.TrimSpace(assignee),
 		DueDate:       strings.TrimSpace(dueDate),
@@ -2795,7 +2805,7 @@ func (s *Store) CreateCard(userID, actor, projectID, title, description, status,
 	return card, s.saveLocked()
 }
 
-func (s *Store) UpdateCard(userID, actor, projectID, cardID string, title, description, status, priority, assigneeID, assignee, dueDate *string, estimateHours *float64, estimateNote *string) (Card, string, error) {
+func (s *Store) UpdateCard(userID, actor, projectID, cardID string, title, description, status, priority *string, costIncurred *bool, assigneeID, assignee, dueDate *string, estimateHours *float64, estimateNote *string) (Card, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cards := s.Cards[projectID]
@@ -2841,6 +2851,16 @@ func (s *Store) UpdateCard(userID, actor, projectID, cardID string, title, descr
 				changes = append(changes, "đổi ưu tiên")
 			}
 			cards[i].Priority = next
+		}
+		if costIncurred != nil {
+			if cards[i].CostIncurred != *costIncurred {
+				if *costIncurred {
+					changes = append(changes, "đánh dấu phát sinh chi phí")
+				} else {
+					changes = append(changes, "bỏ phát sinh chi phí")
+				}
+			}
+			cards[i].CostIncurred = *costIncurred
 		}
 		if assigneeID != nil {
 			nextID := strings.TrimSpace(*assigneeID)

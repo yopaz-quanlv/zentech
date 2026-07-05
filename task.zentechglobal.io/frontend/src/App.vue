@@ -781,7 +781,7 @@ async function handleRouteChange() {
         </button>
         <button
           type="button"
-          :class="{ active: activeView === 'projects' || (activeView === 'board' && !activeProject) }"
+          :class="{ active: activeView === 'projects' }"
           @click="openProjectList"
         >
           <FolderKanban :size="17" />
@@ -873,7 +873,7 @@ async function handleRouteChange() {
             <input v-model="search" placeholder="Tìm task, mô tả, người phụ trách..." />
           </label>
         </div>
-        <div v-if="!activeProject" class="panel empty-state">Chưa có project.</div>
+        <div v-if="!projects.length" class="panel empty-state">Chưa có project.</div>
         <div v-else class="kanban">
           <section
             v-for="column in columns"
